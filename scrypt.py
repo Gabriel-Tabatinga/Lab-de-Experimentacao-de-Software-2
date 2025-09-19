@@ -16,7 +16,7 @@ USE_JARS = "true"
 MAX_FILES_PER_PARTITION = "0"
 VARIABLES_AND_FIELDS = "false"
 IGNORED_DIRS = ["build/", "target/", "out/", "bin/", ".git/", ".idea/", ".gradle/", "node_modules/", "vendor/", "dist/", ".mvn/"]
-DO_CLEANUP_SRC = True
+DO_CLEANUP_SRC = False
 
 def ensure_java_and_ck():
     if not Path(CK_JAR).exists():
