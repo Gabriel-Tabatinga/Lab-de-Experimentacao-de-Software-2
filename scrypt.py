@@ -1,21 +1,17 @@
-import os
-import csv
-import sys
-import shutil
-import zipfile
-import tempfile
-import subprocess
+import os, csv, sys, shutil, zipfile, tempfile, subprocess
 from pathlib import Path
 import requests
 
-CK_JAR = os.environ.get("CK_JAR", "ck.jar")
-OUTPUT_BASE = Path("ck_out")
+BASE = Path(__file__).resolve().parent
+CK_JAR = os.environ.get("CK_JAR", str(BASE / "ck.jar"))
+OUTPUT_BASE = BASE / "ck_out"
+WORK_BASE = BASE / "work_one"
+LOG_BASE = BASE / "ck_logs"
 REQUEST_TIMEOUT = 180
 JAVA_TIMEOUT = 1200
 USE_JARS = "true"
 MAX_FILES_PER_PARTITION = "0"
 VARIABLES_AND_FIELDS = "false"
-IGNORED_DIRS = ["build/", "target/", "out/", "bin/", ".git/", ".idea/", ".gradle/", "node_modules/", "vendor/", "dist/", ".mvn/"]
 DO_CLEANUP_SRC = False
 
 def ensure_java_and_ck():
@@ -47,6 +43,7 @@ def extract_full_name(row):
     return None
 
 def select_from_csv(rows, selector):
+    selector = selector.strip()
     if selector.isdigit():
         idx = int(selector)
         if idx <= 0 or idx > len(rows):
@@ -56,7 +53,7 @@ def select_from_csv(rows, selector):
         if not fn:
             raise ValueError("full_name ausente na linha selecionada")
         return fn
-    s = selector.strip()
+    s = selector
     if s.startswith("http://") or s.startswith("https://"):
         parts = s.split("github.com/")[-1].split("/")
         if len(parts) < 2:
@@ -66,13 +63,15 @@ def select_from_csv(rows, selector):
         fn = extract_full_name(row)
         if fn and fn.lower() == s.lower():
             return fn
+    if "/" in s and len(s.split("/")) == 2:
+        return s
     raise ValueError("repositório não encontrado em repos.csv")
 
 def get_session_and_headers():
     s = requests.Session()
     h = {"Accept": "application/vnd.github+json", "User-Agent": "ck-one-from-csv/1.0"}
     try:
-        with open("token.txt", "r", encoding="utf-8") as f:
+        with open(BASE / "token.txt", "r", encoding="utf-8") as f:
             token = f.read().strip()
         if token:
             h["Authorization"] = f"token {token}"
@@ -124,23 +123,66 @@ def download_and_extract_zipball(session, headers, owner, repo, branch, dest_dir
         except:
             pass
 
-def run_ck_on_repo(src_dir: Path, output_dir: Path):
+def count_java_files(dir_path: Path):
+    c = 0
+    for _ in dir_path.rglob("*.java"):
+        c += 1
+    return c
+
+def guess_java_root(src_dir: Path):
+    candidates = [
+        "src/main/java",
+        "app/src/main/java",
+        "src",
+        "source",
+        "sources",
+        "codes/java",
+        "code/java",
+        "java",
+        "lib"
+    ]
+    for c in candidates:
+        p = src_dir / c
+        if p.exists() and p.is_dir():
+            if count_java_files(p) > 0:
+                return p
+    best_dir = None
+    best_count = 0
+    for d in src_dir.rglob("*"):
+        if d.is_dir():
+            cnt = 0
+            try:
+                for _ in d.rglob("*.java"):
+                    cnt += 1
+            except:
+                cnt = 0
+            if cnt > best_count:
+                best_count = cnt
+                best_dir = d
+    return best_dir if best_count > 0 else None
+
+def run_ck_on_root(java_root: Path, output_dir: Path, log_dir: Path):
     output_dir.mkdir(parents=True, exist_ok=True)
-    args = ["java","-jar",CK_JAR,str(src_dir),USE_JARS,MAX_FILES_PER_PARTITION,VARIABLES_AND_FIELDS,str(output_dir),*IGNORED_DIRS]
+    log_dir.mkdir(parents=True, exist_ok=True)
+    args = ["java","-jar",CK_JAR,str(java_root),USE_JARS,MAX_FILES_PER_PARTITION,VARIABLES_AND_FIELDS,str(output_dir)]
     res = subprocess.run(args, capture_output=True, text=True, timeout=JAVA_TIMEOUT)
+    (log_dir / "ck_stdout.txt").write_text(res.stdout or "", encoding="utf-8")
+    (log_dir / "ck_stderr.txt").write_text(res.stderr or "", encoding="utf-8")
     if res.returncode != 0:
-        raise RuntimeError(res.stderr.strip()[:4000])
+        raise RuntimeError(f"CK falhou. Veja {log_dir/'ck_stderr.txt'}")
 
 def main():
     if len(sys.argv) == 1:
-        print("Uso: python ck_one_from_csv.py <seletor> [branch]\n       ou: python ck_one_from_csv.py <caminho_repos.csv> <seletor> [branch]")
+        print("Uso: python scrypt.py <seletor> [branch]\n       ou: python scrypt.py <caminho_repos.csv> <seletor> [branch]")
         sys.exit(1)
     if len(sys.argv) == 2:
-        csv_path = "repos.csv"
+        csv_path = BASE / "repos.csv"
         selector = sys.argv[1]
         branch = None
     else:
-        csv_path = sys.argv[1]
+        csv_path = Path(sys.argv[1])
+        if not csv_path.is_absolute():
+            csv_path = BASE / csv_path
         selector = sys.argv[2]
         branch = sys.argv[3] if len(sys.argv) >= 4 else None
     ensure_java_and_ck()
@@ -150,13 +192,26 @@ def main():
     session, headers = get_session_and_headers()
     if not branch:
         branch = get_default_branch(session, headers, owner, repo)
-    src_dir = Path("work_one") / owner / repo
+    src_dir = WORK_BASE / owner / repo
     out_dir = OUTPUT_BASE / owner / repo
+    log_dir = LOG_BASE / owner / repo
     shutil.rmtree(src_dir, ignore_errors=True)
     print(f"Baixando {owner}/{repo}@{branch}")
     download_and_extract_zipball(session, headers, owner, repo, branch, src_dir)
-    print("Executando CK")
-    run_ck_on_repo(src_dir, out_dir)
+    total_java = count_java_files(src_dir)
+    print(f".java encontrados (repo completo): {total_java}")
+    java_root = guess_java_root(src_dir)
+    if not java_root:
+        print("Nenhum .java encontrado. Escolha outro repositório.")
+        sys.exit(0)
+    print(f"Executando CK em: {java_root}")
+    run_ck_on_root(java_root, out_dir, log_dir)
+    class_csv = out_dir / "class.csv"
+    lines = 0
+    if class_csv.exists():
+        with open(class_csv, "r", encoding="utf-8-sig") as f:
+            lines = sum(1 for _ in f)
+    print(f"class.csv linhas: {lines}")
     print(f"OK: {out_dir}")
     if DO_CLEANUP_SRC:
         shutil.rmtree(src_dir, ignore_errors=True)

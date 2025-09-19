@@ -1,6 +1,8 @@
 import sys, csv
 from pathlib import Path
 
+BASE = Path(__file__).resolve().parent
+
 def append_with_repo(src_csv: Path, dest_csv: Path, repo_full_name: str):
     if not src_csv.exists():
         return
@@ -31,25 +33,10 @@ def pick_col(header, candidates):
     return None
 
 def aggregate_class_metrics(class_csv: Path):
-    agg = {
-        "num_classes": 0,
-        "sum_class_loc": 0.0,
-        "avg_class_wmc": 0.0,
-        "avg_class_cbo": 0.0,
-        "avg_class_rfc": 0.0,
-        "avg_class_lcom": 0.0,
-        "max_class_dit": 0.0,
-    }
+    agg = {"num_classes": 0,"sum_class_loc": 0.0,"avg_class_wmc": 0.0,"avg_class_cbo": 0.0,"avg_class_rfc": 0.0,"avg_class_lcom": 0.0,"max_class_dit": 0.0}
     if not class_csv.exists():
         return agg
-    colmap = {
-        "wmc": ["wmc", "WMC"],
-        "cbo": ["cbo", "CBO", "cboModified", "CBOModified"],
-        "rfc": ["rfc", "RFC"],
-        "lcom": ["lcom", "LCOM"],
-        "dit": ["dit", "DIT"],
-        "loc": ["loc", "LOC", "locClass"]
-    }
+    colmap = {"wmc": ["wmc","WMC"],"cbo": ["cbo","CBO","cboModified","CBOModified"],"rfc": ["rfc","RFC"],"lcom": ["lcom","LCOM"],"dit": ["dit","DIT"],"loc": ["loc","LOC","locClass"]}
     totals = {"wmc": 0.0, "cbo": 0.0, "rfc": 0.0, "lcom": 0.0, "loc": 0.0, "n": 0}
     max_dit = None
     with open(class_csv, "r", encoding="utf-8-sig", newline="") as f:
@@ -75,22 +62,12 @@ def aggregate_class_metrics(class_csv: Path):
     agg["num_classes"] = n
     agg["sum_class_loc"] = totals["loc"]
     if n > 0:
-        agg["avg_class_wmc"] = totals["wmc"] / n if totals["wmc"] else 0.0
-        agg["avg_class_cbo"] = totals["cbo"] / n if totals["cbo"] else 0.0
-        agg["avg_class_rfc"] = totals["rfc"] / n if totals["rfc"] else 0.0
-        agg["avg_class_lcom"] = totals["lcom"] / n if totals["lcom"] else 0.0
+        agg["avg_class_wmc"] = totals["wmc"]/n if totals["wmc"] else 0.0
+        agg["avg_class_cbo"] = totals["cbo"]/n if totals["cbo"] else 0.0
+        agg["avg_class_rfc"] = totals["rfc"]/n if totals["rfc"] else 0.0
+        agg["avg_class_lcom"] = totals["lcom"]/n if totals["lcom"] else 0.0
     agg["max_class_dit"] = max_dit if max_dit is not None else 0.0
     return agg
-
-def write_agg_row(dest_csv: Path, repo_full_name: str, agg: dict):
-    header = ["repo_full_name","num_classes","sum_class_loc","avg_class_wmc","avg_class_cbo","avg_class_rfc","avg_class_lcom","max_class_dit"]
-    write_header = not dest_csv.exists()
-    with open(dest_csv, "a", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=header)
-        if write_header:
-            w.writeheader()
-        row = {"repo_full_name": repo_full_name, **agg}
-        w.writerow(row)
 
 def main():
     if len(sys.argv) < 2:
@@ -98,14 +75,16 @@ def main():
         sys.exit(1)
     repo_full_name = sys.argv[1].strip()
     owner, repo = repo_full_name.split("/", 1)
-    out_dir = Path("ck_out") / owner / repo
+    out_dir = BASE / "ck_out" / owner / repo
     class_csv = out_dir / "class.csv"
     method_csv = out_dir / "method.csv"
-    append_with_repo(class_csv, Path("ck_class_all.csv"), repo_full_name)
-    append_with_repo(method_csv, Path("ck_method_all.csv"), repo_full_name)
+    append_with_repo(class_csv, BASE / "ck_class_all.csv", repo_full_name)
+    append_with_repo(method_csv, BASE / "ck_method_all.csv", repo_full_name)
     agg = aggregate_class_metrics(class_csv)
-    write_agg_row(Path("repos_ck_agg.csv"), repo_full_name, agg)
-    print("OK")
-
-if __name__ == "__main__":
-    main()
+    with open(BASE / "repos_ck_agg.csv", "a", encoding="utf-8", newline="") as f:
+        header = ["repo_full_name","num_classes","sum_class_loc","avg_class_wmc","avg_class_cbo","avg_class_rfc","avg_class_lcom","max_class_dit"]
+        write_header = not (BASE / "repos_ck_agg.csv").exists()
+        w = csv.DictWriter(f, fieldnames=header)
+        if write_header:
+            w.writeheader()
+        w.writerow
